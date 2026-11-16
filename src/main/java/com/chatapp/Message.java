@@ -1,17 +1,11 @@
 package com.chatapp;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * Message class for QuickChat (Part 2 - Sending Messages).
+ * Message class for QuickChat.
  * Creates, validates, sends, discards and stores messages.
+ * The arrays of messages are kept in the MessageStore class (Part 3).
  */
 public class Message {
 
@@ -21,23 +15,19 @@ public class Message {
     // Reuses the cell phone validation written in Part 1
     private static final Login CELL_VALIDATOR = new Login("", "");
 
-    // All messages sent while the program is running
-    private static final List<Message> sentMessages = new ArrayList<>();
-
-    // All messages the user chose to store for later
-    private static final List<Message> storedMessages = new ArrayList<>();
-
     // Counts messages as they are created (the first message is number 0)
     private static int messageCounter = 0;
 
-    // File that stored messages are written to
-    private static String storagePath = "messages.json";
+    // The logged-in user, used as the sender of new messages
+    private static String currentSender = "Unknown";
 
     private final String messageId;
     private final int numMessagesSent;
     private final String recipient;
     private final String text;
     private final String messageHash;
+    private String sender;
+    private String status = "";
 
     /**
      * Creates a message with a randomly generated ten-digit ID.
@@ -50,7 +40,8 @@ public class Message {
     }
 
     /**
-     * Creates a message with a supplied ID and number (used for testing).
+     * Creates a message with a supplied ID and number (used for testing and
+     * for messages read back from the JSON file).
      *
      * @param messageId       the message ID
      * @param numMessagesSent the message number
@@ -62,6 +53,7 @@ public class Message {
         this.numMessagesSent = numMessagesSent;
         this.recipient = recipient;
         this.text = text;
+        this.sender = currentSender;
         this.messageHash = createMessageHash();
     }
 
@@ -158,7 +150,8 @@ public class Message {
     }
 
     /**
-     * Carries out the user's choice for this message.
+     * Carries out the user's choice for this message and adds it to the
+     * matching array in MessageStore.
      *
      * @param choice 1 = send, 2 = disregard, 3 = store for later
      * @return the message for the chosen option
@@ -166,9 +159,10 @@ public class Message {
     public String sentMessage(int choice) {
         switch (choice) {
             case 1:
-                sentMessages.add(this);
+                MessageStore.record(this, MessageStore.SENT);
                 return "Message successfully sent.";
             case 2:
+                MessageStore.record(this, MessageStore.DISREGARDED);
                 return "Press 0 to delete the message.";
             case 3:
                 if (storeMessage()) {
@@ -194,88 +188,33 @@ public class Message {
      * @return the details of all messages sent while the program is running
      */
     public static String printMessages() {
-        if (sentMessages.isEmpty()) {
-            return "No messages have been sent.";
-        }
-        StringBuilder output = new StringBuilder();
-        for (Message message : sentMessages) {
-            output.append(message.getDetails()).append("\n\n");
-        }
-        return output.toString().trim();
+        return MessageStore.sentMessagesDetails();
     }
 
     /**
      * @return the total number of messages sent
      */
     public static int returnTotalMessages() {
-        return sentMessages.size();
+        return MessageStore.totalSent();
     }
 
     /**
-     * Stores this message, and every other stored message, in a JSON file.
-     * The JSON is written by hand: an array of objects, one per message.
+     * Stores this message in the stored messages array and saves all stored
+     * messages to the JSON file.
      *
      * @return true if the file was written successfully
      */
     public boolean storeMessage() {
-        storedMessages.add(this);
-
-        StringBuilder json = new StringBuilder("[\n");
-        for (int i = 0; i < storedMessages.size(); i++) {
-            Message m = storedMessages.get(i);
-            json.append("  {\n")
-                .append("    \"messageId\": \"").append(escapeJson(m.messageId)).append("\",\n")
-                .append("    \"messageNumber\": ").append(m.numMessagesSent).append(",\n")
-                .append("    \"messageHash\": \"").append(escapeJson(m.messageHash)).append("\",\n")
-                .append("    \"recipient\": \"").append(escapeJson(m.recipient)).append("\",\n")
-                .append("    \"message\": \"").append(escapeJson(m.text)).append("\"\n")
-                .append("  }");
-            json.append(i < storedMessages.size() - 1 ? ",\n" : "\n");
-        }
-        json.append("]\n");
-
-        try {
-            Path path = Paths.get(storagePath);
-            if (path.getParent() != null) {
-                Files.createDirectories(path.getParent());
-            }
-            Files.write(path, json.toString().getBytes(StandardCharsets.UTF_8));
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
+        MessageStore.record(this, MessageStore.STORED);
+        return MessageStore.saveStoredMessages();
     }
 
     /**
-     * Escapes special characters so text is valid inside a JSON string.
-     */
-    private static String escapeJson(String value) {
-        StringBuilder escaped = new StringBuilder();
-        for (char c : value.toCharArray()) {
-            switch (c) {
-                case '"':  escaped.append("\\\""); break;
-                case '\\': escaped.append("\\\\"); break;
-                case '\n': escaped.append("\\n");  break;
-                case '\r': escaped.append("\\r");  break;
-                case '\t': escaped.append("\\t");  break;
-                default:
-                    if (c < 0x20) {
-                        escaped.append(String.format("\\u%04x", (int) c));
-                    } else {
-                        escaped.append(c);
-                    }
-            }
-        }
-        return escaped.toString();
-    }
-
-    /**
-     * Clears all stored and sent messages and resets the counter.
+     * Clears all messages and resets the message counter.
      * Used so that each unit test starts fresh.
      */
     public static void resetAll() {
-        sentMessages.clear();
-        storedMessages.clear();
+        MessageStore.resetAll();
         messageCounter = 0;
     }
 
@@ -283,7 +222,14 @@ public class Message {
      * Changes the file used by storeMessage (used for testing).
      */
     public static void setStoragePath(String path) {
-        storagePath = path;
+        MessageStore.setStoragePath(path);
+    }
+
+    /**
+     * Sets the sender used for every new message (the logged-in user).
+     */
+    public static void setCurrentSender(String senderName) {
+        currentSender = senderName;
     }
 
     public String getMessageId() { return messageId; }
@@ -291,4 +237,8 @@ public class Message {
     public String getRecipient() { return recipient; }
     public String getText() { return text; }
     public String getMessageHash() { return messageHash; }
+    public String getSender() { return sender; }
+    public void setSender(String sender) { this.sender = sender; }
+    public String getStatus() { return status; }
+    public void setStatus(String status) { this.status = status; }
 }
